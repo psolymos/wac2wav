@@ -566,7 +566,7 @@ void FrameDecode(WacState *WP)
       {
         skip_frames = 0;
 
-        float time_offset = (float)WP->frameindex * WP->framesize / WP->samplerate;
+        float time_offset = (float)((WP->frameindex - 1) * WP->framesize) / WP->samplerate;
         printf("Frame Index %i, Time Offset %f\n", WP->frameindex, time_offset);
 
         fclose(WP->filetbl[1]);
@@ -579,7 +579,7 @@ void FrameDecode(WacState *WP)
           struct tm event_ts = file_ts;
           event_ts.tm_sec += time_offset;
           mktime(&event_ts);
-          int fmsec = (int)((time_offset - (int)time_offset) * 1000);
+          int fmsec = (int)(((time_offset - (int)time_offset) + 0.0005) * 1000);
 
           char buf[64];
           strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &event_ts);
