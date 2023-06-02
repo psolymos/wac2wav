@@ -159,6 +159,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 typedef struct WacState_s
 {
@@ -201,14 +202,27 @@ char dest_file[80];
 // Simply take stdin to stdout
 int main(int argc, char *argv[])
 {
+  int opt, index;
   int i;
   size_t sz;
   unsigned char hdr[24];
   char wfile_name[256];
 
-  if (argc != 2)
+  while ((opt = getopt(argc, argv, "h")) != -1)
   {
-    fprintf(stderr, "Provide 1 arguments to function (input.wac).\n");
+    switch (opt)
+    {
+    case 'h':
+      fprintf(stderr, "Usage: %s input.wac\n", argv[0]);
+      exit(0);
+    default:
+      abort();
+    }
+  }
+
+  if (access(argv[optind], F_OK) != 0)
+  {
+    printf("File does not exist\n");
     exit(1);
   }
 
@@ -234,8 +248,9 @@ int main(int argc, char *argv[])
 
   // instead of streaming stdin and stdout open files
   // also need to close these connections when exiting with 1
-  strcpy(dest_file, argv[1]);
-  W.filetbl[0] = fopen(argv[1], "rb");
+
+   strcpy(dest_file, argv[optind]);
+  W.filetbl[0] = fopen(argv[optind], "rb");
 
   // attempt to extract date and timestamp
   char delimext[] = ".";
