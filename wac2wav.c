@@ -188,7 +188,7 @@ void WriteWAVHeader(WacState *WP);
 #define READ(WP, buf, len) fread(buf, 1, len, (WP)->filetbl[0])
 #define WRITE(WP, buf, len) fwrite(buf, 1, len, (WP)->filetbl[1])
 
-int flag = 0;
+int skip_frames = 0;
 
 // Simply take stdin to stdout
 int main(int argc, char *argv[])
@@ -196,7 +196,7 @@ int main(int argc, char *argv[])
   int i;
   size_t sz;
   unsigned char hdr[24];
-  char wfile_name[90];
+  char wfile_name[256];
 
   if (argc != 3)
   {
@@ -229,7 +229,7 @@ int main(int argc, char *argv[])
   strcpy(W.wfile_name, argv[2]);
   W.filetbl[0] = fopen(argv[1], "rb");
   W.file_index++;
-  sprintf(wfile_name, "%i_%s", W.file_index, W.wfile_name);
+  sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, W.wfile_name);
   W.filetbl[1] = fopen(wfile_name, "wb");
 
   // Parse WAC header and validate supported formats
@@ -264,6 +264,9 @@ int main(int argc, char *argv[])
   W.channelcount = hdr[5];
   W.framesize = hdr[6] | (hdr[7] << 8);
 
+  // DEBUG
+  fprintf(stderr, "Channel Count %d, Frame Size %d\n", W.channelcount, W.framesize);
+
   // All Wildlife Acoustics WAC files have 512-byte (256-sample mono or
   // 128 sample stereo) frames.
   if (W.channelcount * W.framesize != 256)
@@ -286,6 +289,9 @@ int main(int argc, char *argv[])
   // Read flags
   W.flags = hdr[10] | (hdr[11] << 8);
 
+  // DEBUG
+  fprintf(stderr, "Flags %x\n", W.flags);
+
   // For this example, we do not support triggered WAC files because we are
   // simply streaming to a single WAV file.  See FrameDecode() logic below
   // about triggered WAC mode.  If any special "zero frames" are present, this
@@ -304,6 +310,9 @@ int main(int argc, char *argv[])
   W.samplecount = hdr[16] | (hdr[17] << 8) | (hdr[18] << 16) | (hdr[19] << 24);
   W.seeksize = hdr[20] | (hdr[21] << 8);
   W.seekentries = hdr[22] | (hdr[23] << 8);
+
+  // DEBUG
+  fprintf(stderr, "BlockSize %d, Sample Rate %d, Sample Count %ld, Seek Size %d, Seek Entries %d\n", W.blocksize, W.samplerate, W.samplecount, W.seeksize, W.seekentries);
 
   // Skip over the seek table (not used in this example)
   for (i = 0; i < W.seekentries; i++)
@@ -408,6 +417,10 @@ void FrameDecode(WacState *WP)
   {
     // Verify that the block header is valid and as expected
     int block = WP->frameindex / WP->blocksize;
+
+    // DEBUG
+    // fprintf(stderr, "New Block %d\n", block);
+
     if (ReadWord(WP) != 0x8000 || ReadWord(WP) != 0x0001 || ReadWord(WP) != (block & 0xffff) || ReadWord(WP) != ((block >> 16) & 0xffff))
     {
       fprintf(stderr, "Bad block header\n");
@@ -480,21 +493,26 @@ void FrameDecode(WacState *WP)
       if (g[ch] == 0)
       {
         // Hit a zero ... ignore, but flag we want to start a new file
-        flag = 1;
+        skip_frames = 1;
         continue;
         // s = 0;
         // WRITE(WP, &s, 2);
         // continue;
       }
-      if (flag)
+      if (skip_frames)
       // Have to start a new file
       {
-        flag = 0;
+        float time = (float)WP->frameindex * WP->framesize / WP->samplerate;
+        int timeh = time / 3600;
+        int timem = (time - timeh * 3600) / 60;
+        float times = (time - timeh * 3600 - timem * 60);
+        printf("Frame Index %i %i:%i:%.2f\n", WP->frameindex, timeh, timem, times);
+        skip_frames = 0;
         fclose(WP->filetbl[1]);
         WP->file_index++;
-        printf("Here we are %i\n", WP->file_index);
+        printf("Exporting Triggered Event %i\n", WP->file_index);
         char wfile_name[90];
-        sprintf(wfile_name, "%i_%s", WP->file_index, WP->wfile_name);
+        sprintf(wfile_name, "%i_%s_%i_%i.wav", WP->file_index, WP->wfile_name, (int)time, (int)((time - (int)time) * 1000));
         WP->filetbl[1] = fopen(wfile_name, "wb");
         WriteWAVHeader(WP);
       }
