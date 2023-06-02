@@ -199,6 +199,11 @@ char *file_basename, *file_date, *file_time;
 struct tm file_ts;
 char dest_file[80];
 
+void print_help(char *arg)
+{
+  fprintf(stderr, "Usage: %s input.wac\n", arg);
+}
+
 // Simply take stdin to stdout
 int main(int argc, char *argv[])
 {
@@ -213,17 +218,17 @@ int main(int argc, char *argv[])
     switch (opt)
     {
     case 'h':
-      fprintf(stderr, "Usage: %s input.wac\n", argv[0]);
+      print_help(argv[0]);
       exit(0);
     default:
       abort();
     }
   }
 
-  if (access(argv[optind], F_OK) != 0)
+  if (argc == 1)
   {
-    printf("File does not exist\n");
-    exit(1);
+    print_help(argv[0]);
+    exit(0);
   }
 
   // Copyright
@@ -249,7 +254,13 @@ int main(int argc, char *argv[])
   // instead of streaming stdin and stdout open files
   // also need to close these connections when exiting with 1
 
-   strcpy(dest_file, argv[optind]);
+  if (access(argv[optind], F_OK) != 0)
+  {
+    printf("File \"%s\" does not exist.\n", argv[optind]);
+    exit(1);
+  }
+
+  strcpy(dest_file, argv[optind]);
   W.filetbl[0] = fopen(argv[optind], "rb");
 
   // attempt to extract date and timestamp
