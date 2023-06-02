@@ -238,12 +238,14 @@ int main(int argc, char *argv[])
   W.filetbl[0] = fopen(argv[1], "rb");
 
   // attempt to extract date and timestamp
+  char delimext[] = ".";
   char delim[] = "_";
 
   // strcpy(temp_str, argv[2]);
 
-  file_basename = strtok(dest_file, delim);
-  printf("%s", file_basename);
+  file_basename = strtok(dest_file, delimext);
+  file_basename = strtok(file_basename, delim);
+  printf("%s\n", file_basename);
 
   if (file_basename != NULL)
   {
@@ -287,7 +289,7 @@ int main(int argc, char *argv[])
   }
   else
   {
-    sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, W.wfile_name);
+    sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, file_basename);
   }
 
   W.filetbl[1] = fopen(wfile_name, "wb");
@@ -588,7 +590,7 @@ void FrameDecode(WacState *WP)
         }
         else
         {
-          sprintf(wfile_name, "%i_%s_%i_%i.wav", WP->file_index, WP->wfile_name, (int)time_offset, (int)((time_offset - (int)time_offset) * 1000));
+          sprintf(wfile_name, "%i_%s_%i_%i.wav", WP->file_index, file_basename, (int)time_offset, (int)((time_offset - (int)time_offset) * 1000));
         }
         WP->filetbl[1] = fopen(wfile_name, "wb");
         WriteWAVHeader(WP);
