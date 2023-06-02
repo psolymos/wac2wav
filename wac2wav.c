@@ -150,12 +150,15 @@
 //    NOTE: This code compiles on Linux and should be easy to port to other
 //    applications.  Little-endian is assumed.
 //
+#define _XOPEN_SOURCE
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct WacState_s
 {
@@ -189,6 +192,10 @@ void WriteWAVHeader(WacState *WP);
 #define WRITE(WP, buf, len) fwrite(buf, 1, len, (WP)->filetbl[1])
 
 int skip_frames = 0;
+int year, month, day, hour, min, sec;
+int date_time_valid;
+char *file_basename, *file_date, *file_time;
+struct tm file_ts;
 
 // Simply take stdin to stdout
 int main(int argc, char *argv[])
@@ -224,12 +231,65 @@ int main(int argc, char *argv[])
   //  W.filetbl[0] = stdin;
   //  W.filetbl[1] = stdout;
 
-  // instead of treaming stdin and stdout open files
+  // instead of streaming stdin and stdout open files
   // also need to close these connections when exiting with 1
   strcpy(W.wfile_name, argv[2]);
   W.filetbl[0] = fopen(argv[1], "rb");
-  W.file_index++;
-  sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, W.wfile_name);
+
+  // attempt to extract date and timestamp
+  char temp_str[256];
+  char delim[] = "_";
+
+  // strcpy(temp_str, argv[2]);
+
+  file_basename = strtok(argv[2], delim);
+  printf("%s", file_basename);
+
+  if (file_basename != NULL)
+  {
+    W.file_index++;
+    file_date = strtok(NULL, delim);
+    if (file_date != NULL)
+    {
+      printf(" %s", file_date);
+      sscanf(file_date, "%4i%2i%2i", &year, &month, &day);
+      file_time = strtok(NULL, delim);
+      if (file_time != NULL)
+      {
+        sscanf(file_time, "%2i%2i%2i", &hour, &min, &sec);
+        printf(" %s", file_time);
+        date_time_valid = 1;
+      }
+    }
+    printf("\n");
+  }
+  else
+  {
+    exit(1);
+  }
+
+  memset(&file_ts, 0, sizeof(struct tm));
+
+  if (date_time_valid)
+  {
+    sprintf(temp_str, "%s_%s", file_date, file_time);
+    printf("Date in filename: %s\n", temp_str);
+    strptime(temp_str, "%Y%m%d_%H%M%S", &file_ts);
+
+    char buf[64];
+    strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &file_ts);
+    printf("File time extracted: %s\n", buf);
+
+    printf("Date %2i-%02i-%02i\n", year, month, day);
+    printf("Time %02i:%02i:%02i\n", hour, min, sec);
+
+    sprintf(wfile_name, "%i_%s_%s_%03i.wav", W.file_index, file_basename, buf, 0);
+  }
+  else
+  {
+    sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, W.wfile_name);
+  }
+
   W.filetbl[1] = fopen(wfile_name, "wb");
 
   // Parse WAC header and validate supported formats
@@ -502,17 +562,34 @@ void FrameDecode(WacState *WP)
       if (skip_frames)
       // Have to start a new file
       {
-        float time = (float)WP->frameindex * WP->framesize / WP->samplerate;
-        int timeh = time / 3600;
-        int timem = (time - timeh * 3600) / 60;
-        float times = (time - timeh * 3600 - timem * 60);
-        printf("Frame Index %i %i:%i:%.2f\n", WP->frameindex, timeh, timem, times);
         skip_frames = 0;
+
+        float time_offset = (float)WP->frameindex * WP->framesize / WP->samplerate;
+        printf("Frame Index %i, Time Offset %f\n", WP->frameindex, time_offset);
+
         fclose(WP->filetbl[1]);
         WP->file_index++;
         printf("Exporting Triggered Event %i\n", WP->file_index);
         char wfile_name[90];
-        sprintf(wfile_name, "%i_%s_%i_%i.wav", WP->file_index, WP->wfile_name, (int)time, (int)((time - (int)time) * 1000));
+
+        if (date_time_valid)
+        {
+          struct tm event_ts = file_ts;
+          event_ts.tm_sec += time_offset;
+          mktime(&event_ts);
+          int fmsec = (int)((time_offset - (int)time_offset) * 1000);
+
+          char buf[64];
+          strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &event_ts);
+          printf("New calculate time: %s.%d\n", buf, fmsec);
+
+          printf("%i_%s_%s_%03i.wav\n", WP->file_index, file_basename, buf, fmsec);
+          sprintf(wfile_name, "%i_%s_%s_%03i.wav", WP->file_index, file_basename, buf, fmsec);
+        }
+        else
+        {
+          sprintf(wfile_name, "%i_%s_%i_%i.wav", WP->file_index, WP->wfile_name, (int)time_offset, (int)((time_offset - (int)time_offset) * 1000));
+        }
         WP->filetbl[1] = fopen(wfile_name, "wb");
         WriteWAVHeader(WP);
       }
