@@ -161,6 +161,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define VERSION ("0.1")
+
 typedef struct WacState_s
 {
   int version;               // WAC file version number
@@ -201,7 +203,7 @@ char dest_file[80];
 
 void print_help(char *arg)
 {
-  fprintf(stderr, "Usage: %s input.wac\n", arg);
+  fprintf(stderr, "Usage: %s [-v] [-h] input.wac\n", arg);
 }
 
 // Simply take stdin to stdout
@@ -213,19 +215,25 @@ int main(int argc, char *argv[])
   unsigned char hdr[24];
   char wfile_name[256];
 
-  while ((opt = getopt(argc, argv, "h")) != -1)
+  while ((opt = getopt(argc, argv, "hv")) != -1)
   {
     switch (opt)
     {
+    case 'v':
+      printf("%s version %s\n", argv[0], VERSION);
+      exit(0);
     case 'h':
       print_help(argv[0]);
       exit(0);
+    case '?': // used for some unknown options
+      printf("unknown option: %c\n", optopt);
+      break;
     default:
       abort();
     }
   }
 
-  if (argc == 1)
+  if (optind == argc)
   {
     print_help(argv[0]);
     exit(0);
