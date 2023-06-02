@@ -196,6 +196,7 @@ int year, month, day, hour, min, sec;
 int date_time_valid;
 char *file_basename, *file_date, *file_time;
 struct tm file_ts;
+char dest_file[80];
 
 // Simply take stdin to stdout
 int main(int argc, char *argv[])
@@ -205,9 +206,9 @@ int main(int argc, char *argv[])
   unsigned char hdr[24];
   char wfile_name[256];
 
-  if (argc != 3)
+  if (argc != 2)
   {
-    fprintf(stderr, "Provide 2 arguments to function (input.wac output.wav).\n");
+    fprintf(stderr, "Provide 1 arguments to function (input.wac).\n");
     exit(1);
   }
 
@@ -233,16 +234,15 @@ int main(int argc, char *argv[])
 
   // instead of streaming stdin and stdout open files
   // also need to close these connections when exiting with 1
-  strcpy(W.wfile_name, argv[2]);
+  strcpy(dest_file, argv[1]);
   W.filetbl[0] = fopen(argv[1], "rb");
 
   // attempt to extract date and timestamp
-  char temp_str[256];
   char delim[] = "_";
 
   // strcpy(temp_str, argv[2]);
 
-  file_basename = strtok(argv[2], delim);
+  file_basename = strtok(dest_file, delim);
   printf("%s", file_basename);
 
   if (file_basename != NULL)
@@ -272,11 +272,11 @@ int main(int argc, char *argv[])
 
   if (date_time_valid)
   {
-    sprintf(temp_str, "%s_%s", file_date, file_time);
-    printf("Date in filename: %s\n", temp_str);
-    strptime(temp_str, "%Y%m%d_%H%M%S", &file_ts);
-
     char buf[64];
+    sprintf(buf, "%s_%s", file_date, file_time);
+    printf("Date in filename: %s\n", buf);
+    strptime(buf, "%Y%m%d_%H%M%S", &file_ts);
+
     strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &file_ts);
     printf("File time extracted: %s\n", buf);
 
@@ -570,7 +570,7 @@ void FrameDecode(WacState *WP)
         fclose(WP->filetbl[1]);
         WP->file_index++;
         printf("Exporting Triggered Event %i\n", WP->file_index);
-        char wfile_name[90];
+        char wfile_name[128];
 
         if (date_time_valid)
         {
