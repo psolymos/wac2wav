@@ -150,66 +150,105 @@
 //    NOTE: This code compiles on Linux and should be easy to port to other
 //    applications.  Little-endian is assumed.
 //
+#define _XOPEN_SOURCE
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
+#define VERSION ("0.1")
 
 typedef struct WacState_s
-  {
-    int            version;     // WAC file version number
-    int            flags;       // WAC flags
-    int            framesize;   // samples per channel per frame
-    int            blocksize;   // frames per block
-    int            seeksize;    // blocks per seek-table entry
-    int            seekentries; // number of seek-table entries
-    int            channelcount;// number of channels
-    int            samplerate;  // sample rate
-    unsigned long  samplecount; // number of samples in file per channel
+{
+  int version;               // WAC file version number
+  int flags;                 // WAC flags
+  int framesize;             // samples per channel per frame
+  int blocksize;             // frames per block
+  int seeksize;              // blocks per seek-table entry
+  int seekentries;           // number of seek-table entries
+  int channelcount;          // number of channels
+  int samplerate;            // sample rate
+  unsigned long samplecount; // number of samples in file per channel
 
-    FILE          *filetbl[2];    // input and output file descriptors
-    int            frameindex;    // current frame index
-    int            filebit_index; // index to current bit in word (0-15)
-    unsigned short bitbuffer;     // remaining bits in bit buffer
+  int file_index;
+  char wfile_name[80];
+  FILE *filetbl[2];         // input and output file descriptors
+  int frameindex;           // current frame index
+  int filebit_index;        // index to current bit in word (0-15)
+  unsigned short bitbuffer; // remaining bits in bit buffer
 
-  } WacState;
+} WacState;
 
 // Forward declarations
 int ReadBits(WacState *WP, int _bits);
 unsigned short ReadWord(WacState *WP);
 void FrameDecode(WacState *WP);
+void WriteWAVHeader(WacState *WP);
 
 // Macros for read/write
 #define READ(WP, buf, len) fread(buf, 1, len, (WP)->filetbl[0])
 #define WRITE(WP, buf, len) fwrite(buf, 1, len, (WP)->filetbl[1])
 
+int skip_frames = 0;
+int year, month, day, hour, min, sec;
+int date_time_valid;
+char *file_basename, *file_date, *file_time;
+struct tm file_ts;
+char dest_file[80];
+
+void print_help(char *arg)
+{
+  fprintf(stderr, "Usage: %s [-v] [-h] input.wac\n", arg);
+}
+
 // Simply take stdin to stdout
 int main(int argc, char *argv[])
 {
+  int opt, index;
   int i;
-  unsigned ul;
   size_t sz;
   unsigned char hdr[24];
-  unsigned char cc[4];
+  char wfile_name[256];
 
-  if (argc != 3) {
-    fprintf(stderr, "Provide 2 arguments to function (input.wac output.wav).\n");
-    exit(1);
+  while ((opt = getopt(argc, argv, "hv")) != -1)
+  {
+    switch (opt)
+    {
+    case 'v':
+      printf("%s version %s\n", argv[0], VERSION);
+      exit(0);
+    case 'h':
+      print_help(argv[0]);
+      exit(0);
+    case '?': // used for some unknown options
+      printf("unknown option: %c\n", optopt);
+      break;
+    default:
+      abort();
+    }
+  }
+
+  if (optind == argc)
+  {
+    print_help(argv[0]);
+    exit(0);
   }
 
   // Copyright
-//  fprintf(stderr, "\r\nwac2wavcmd 1.0 Copyright (C) 2014 Wildlife Acoustics, Inc.\r\n\r\n"
-//                  "This program comes with ABSOLUTELY NO WARRANTY;\r\n"
-//		  "This is free software, and you are welcome to redistribute it\r\n"
-//		  "under certain conditions;  Please refer to the GNU GPLv3 license at\r\n"
-//		  "<http://www.gnu.org/licenses/> for details.\r\n\r\n"
-//		  "Usage: reads stdin for .wac file and writes .wav file to stdout\r\n\r\n"
-//		  "Progress: "
-//         );
-// Please, no clutter ... this is GPL >= 3.0
+  //  fprintf(stderr, "\r\nwac2wavcmd 1.0 Copyright (C) 2014 Wildlife Acoustics, Inc.\r\n\r\n"
+  //                  "This program comes with ABSOLUTELY NO WARRANTY;\r\n"
+  //		  "This is free software, and you are welcome to redistribute it\r\n"
+  //		  "under certain conditions;  Please refer to the GNU GPLv3 license at\r\n"
+  //		  "<http://www.gnu.org/licenses/> for details.\r\n\r\n"
+  //		  "Usage: reads stdin for .wac file and writes .wav file to stdout\r\n\r\n"
+  //		  "Progress: "
+  //         );
+  // Please, no clutter ... this is GPL >= 3.0
 
   // Initialize WAC state
   WacState W;
@@ -217,84 +256,149 @@ int main(int argc, char *argv[])
 
   // For this simple example, we'll just read WAC from stdin and write WAV
   // to stdout...
-//  W.filetbl[0] = stdin;
-//  W.filetbl[1] = stdout;
+  //  W.filetbl[0] = stdin;
+  //  W.filetbl[1] = stdout;
 
-// instead of treaming stdin and stdout open files
-// also need to close these connections when exiting with 1
-  W.filetbl[0] = fopen(argv[1], "rb");
-  W.filetbl[1] = fopen(argv[2], "wb");
+  // instead of streaming stdin and stdout open files
+  // also need to close these connections when exiting with 1
 
+  if (access(argv[optind], F_OK) != 0)
+  {
+    printf("File \"%s\" does not exist.\n", argv[optind]);
+    exit(1);
+  }
+
+  strcpy(dest_file, argv[optind]);
+  W.filetbl[0] = fopen(argv[optind], "rb");
+
+  // attempt to extract date and timestamp
+  char delimext[] = ".";
+  char delim[] = "_";
+
+  // strcpy(temp_str, argv[2]);
+
+  file_basename = strtok(dest_file, delimext);
+  file_basename = strtok(file_basename, delim);
+  printf("%s\n", file_basename);
+
+  if (file_basename != NULL)
+  {
+    W.file_index++;
+    file_date = strtok(NULL, delim);
+    if (file_date != NULL)
+    {
+      printf(" %s", file_date);
+      sscanf(file_date, "%4i%2i%2i", &year, &month, &day);
+      file_time = strtok(NULL, delim);
+      if (file_time != NULL)
+      {
+        sscanf(file_time, "%2i%2i%2i", &hour, &min, &sec);
+        printf(" %s", file_time);
+        date_time_valid = 1;
+      }
+    }
+    printf("\n");
+  }
+  else
+  {
+    exit(1);
+  }
+
+  memset(&file_ts, 0, sizeof(struct tm));
+
+  if (date_time_valid)
+  {
+    char buf[64];
+    sprintf(buf, "%s_%s", file_date, file_time);
+    printf("Date in filename: %s\n", buf);
+    strptime(buf, "%Y%m%d_%H%M%S", &file_ts);
+
+    strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &file_ts);
+    printf("File time extracted: %s\n", buf);
+
+    printf("Date %2i-%02i-%02i\n", year, month, day);
+    printf("Time %02i:%02i:%02i\n", hour, min, sec);
+
+    sprintf(wfile_name, "%i_%s_%s_%03i.wav", W.file_index, file_basename, buf, 0);
+  }
+  else
+  {
+    sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, file_basename);
+  }
+
+  W.filetbl[1] = fopen(wfile_name, "wb");
 
   // Parse WAC header and validate supported formats
   if ((sz = READ(&W, hdr, 24)) != 24)
-    {
-      fprintf(stderr, "%s: Unexpected eof\n", argv[0]);
-      fclose(W.filetbl[0]);
-      fclose(W.filetbl[1]);
-      exit(1);
-    }
+  {
+    fprintf(stderr, "%s: Unexpected eof\n", argv[0]);
+    fclose(W.filetbl[0]);
+    fclose(W.filetbl[1]);
+    exit(1);
+  }
 
   // Verify "magic" header
-  if (   hdr[0] != 'W'
-      || hdr[1] != 'A'
-      || hdr[2] != 'a'
-      || hdr[3] != 'c'
-     )
-    {
-      fprintf(stderr, "%s: Input not a WAC file\n", argv[0]);
-      fclose(W.filetbl[0]);
-      fclose(W.filetbl[1]);
-      exit(1);
-    }
+  if (hdr[0] != 'W' || hdr[1] != 'A' || hdr[2] != 'a' || hdr[3] != 'c')
+  {
+    fprintf(stderr, "%s: Input not a WAC file\n", argv[0]);
+    fclose(W.filetbl[0]);
+    fclose(W.filetbl[1]);
+    exit(1);
+  }
 
   // Check version
   W.version = hdr[4];
   if (W.version > 4)
-    {
-      fprintf(stderr, "%s: Input version %d not supported\n", argv[0], W.version);
-      fclose(W.filetbl[0]);
-      fclose(W.filetbl[1]);
-      exit(1);
-    }
+  {
+    fprintf(stderr, "%s: Input version %d not supported\n", argv[0], W.version);
+    fclose(W.filetbl[0]);
+    fclose(W.filetbl[1]);
+    exit(1);
+  }
 
   // Read channel count and frame size
   W.channelcount = hdr[5];
   W.framesize = hdr[6] | (hdr[7] << 8);
 
+  // DEBUG
+  fprintf(stderr, "Channel Count %d, Frame Size %d\n", W.channelcount, W.framesize);
+
   // All Wildlife Acoustics WAC files have 512-byte (256-sample mono or
   // 128 sample stereo) frames.
   if (W.channelcount * W.framesize != 256)
-    {
-      fprintf(stderr, "%s: Unsupported block size %d\n", argv[0],W.channelcount*W.framesize);
-      fclose(W.filetbl[0]);
-      fclose(W.filetbl[1]);
-      exit(1);
-    }
+  {
+    fprintf(stderr, "%s: Unsupported block size %d\n", argv[0], W.channelcount * W.framesize);
+    fclose(W.filetbl[0]);
+    fclose(W.filetbl[1]);
+    exit(1);
+  }
 
   // All Wildlife Acoustics WAC files have 1 or 2 channels
   if (W.channelcount > 2)
-    {
-      fprintf(stderr, "%s: Unsupported channel count %d\n", argv[0], W.channelcount);
-      fclose(W.filetbl[0]);
-      fclose(W.filetbl[1]);
-      exit(1);
-    }
+  {
+    fprintf(stderr, "%s: Unsupported channel count %d\n", argv[0], W.channelcount);
+    fclose(W.filetbl[0]);
+    fclose(W.filetbl[1]);
+    exit(1);
+  }
 
   // Read flags
   W.flags = hdr[10] | (hdr[11] << 8);
+
+  // DEBUG
+  fprintf(stderr, "Flags %x\n", W.flags);
 
   // For this example, we do not support triggered WAC files because we are
   // simply streaming to a single WAV file.  See FrameDecode() logic below
   // about triggered WAC mode.  If any special "zero frames" are present, this
   // bit will be set.  For non-triggered recordings, this bit will be clear.
-  if (W.flags & 0x10)
-    {
-      fprintf(stderr, "%s: Triggered WAC files not supported\n", argv[0]);
-      fclose(W.filetbl[0]);
-      fclose(W.filetbl[1]);
-      exit(1);
-    }
+  // if (W.flags & 0x10)
+  // {
+  //   fprintf(stderr, "%s: Triggered WAC files not supported\n", argv[0]);
+  //   fclose(W.filetbl[0]);
+  //   fclose(W.filetbl[1]);
+  //   exit(1);
+  // }
 
   // Parse additional fields from the WAC header
   W.blocksize = hdr[8] | (hdr[9] << 8);
@@ -303,79 +407,35 @@ int main(int argc, char *argv[])
   W.seeksize = hdr[20] | (hdr[21] << 8);
   W.seekentries = hdr[22] | (hdr[23] << 8);
 
+  // DEBUG
+  fprintf(stderr, "BlockSize %d, Sample Rate %d, Sample Count %ld, Seek Size %d, Seek Entries %d\n", W.blocksize, W.samplerate, W.samplecount, W.seeksize, W.seekentries);
+
   // Skip over the seek table (not used in this example)
   for (i = 0; i < W.seekentries; i++)
+  {
+    if ((sz = READ(&W, hdr, 4)) != 4)
     {
-      if ((sz = READ(&W, hdr, 4)) != 4)
-        {
-	  fprintf(stderr, "%s: Unexpected EOF\n", argv[0]);
-    fclose(W.filetbl[0]);
-    fclose(W.filetbl[1]);
-	  exit(1);
-	}
+      fprintf(stderr, "%s: Unexpected EOF\n", argv[0]);
+      fclose(W.filetbl[0]);
+      fclose(W.filetbl[1]);
+      exit(1);
     }
+  }
 
-  // Write WAV file header from WAC header information
-  WRITE(&W, "RIFF", 4);
-  ul =   4 // "WAVE
-       + 8 + 16 // fmt chunk
-       + 8      // data chunk
-       + 2 * W.samplecount * W.channelcount;
-  cc[3] = (ul >> 24) & 0xff;
-  cc[2] = (ul >> 16) & 0xff;
-  cc[1] = (ul >>  8) & 0xff;
-  cc[0] = (ul      ) & 0xff;
-  WRITE(&W, cc, 4);
-  WRITE(&W, "WAVE", 4);
-  WRITE(&W, "fmt ", 4);
-  ul = 16;
-  cc[3] = (ul >> 24) & 0xff;
-  cc[2] = (ul >> 16) & 0xff;
-  cc[1] = (ul >>  8) & 0xff;
-  cc[0] = (ul      ) & 0xff;
-  WRITE(&W, cc, 4);
-  cc[0] = 1; // tag
-  cc[1] = 0;
-  WRITE(&W, cc, 2);
-  cc[0] = W.channelcount;
-  WRITE(&W, cc, 2);
-  ul = W.samplerate;
-  cc[3] = (ul >> 24) & 0xff;
-  cc[2] = (ul >> 16) & 0xff;
-  cc[1] = (ul >>  8) & 0xff;
-  cc[0] = (ul      ) & 0xff;
-  WRITE(&W, cc, 4);
-  ul *= W.channelcount * 2; // bytes per second
-  cc[3] = (ul >> 24) & 0xff;
-  cc[2] = (ul >> 16) & 0xff;
-  cc[1] = (ul >>  8) & 0xff;
-  cc[0] = (ul      ) & 0xff;
-  WRITE(&W, cc, 4);
-  cc[0] = 2*W.channelcount; // bytes per sample
-  cc[1] = 0;
-  WRITE(&W, cc, 2);
-  cc[0] = 16; // bits per sample
-  WRITE(&W, cc, 2);
-  WRITE(&W, "data", 4);
-  ul = W.samplecount * W.channelcount * 2;
-  cc[3] = (ul >> 24) & 0xff;
-  cc[2] = (ul >> 16) & 0xff;
-  cc[1] = (ul >>  8) & 0xff;
-  cc[0] = (ul      ) & 0xff;
-  WRITE(&W, cc, 4);
+  WriteWAVHeader(&W);
 
   // Read frames of data and WRITE samples out
   while (W.samplecount > 0)
-    {
-      FrameDecode(&W);
-      W.samplecount -= W.framesize;
-    }
+  {
+    FrameDecode(&W);
+    W.samplecount -= W.framesize;
+  }
 
   fclose(W.filetbl[0]);
   fclose(W.filetbl[1]);
 
   // All done
-//  fprintf(stderr, "\r\n");
+  //  fprintf(stderr, "\r\n");
   exit(0);
 }
 
@@ -393,35 +453,35 @@ int ReadBits(WacState *WP, int bits)
 
   // While we need bits...
   while (bits > 0)
+  {
+    // If starting a new 16-bit word, read the next 16 bits
+    if (WP->filebit_index == 0)
     {
-      // If starting a new 16-bit word, read the next 16 bits
-      if (WP->filebit_index == 0)
-        {
-	  READ(WP, &WP->bitbuffer, 2);
-	  WP->filebit_index = 16;
-	}
-
-      // If all the bits we need are in the current word, extract the bits,
-      // update state, and break out of the loop.
-      if (bits < WP->filebit_index)
-        {
-	  x <<= bits;
-	  x |= WP->bitbuffer >> (16 - bits);
-	  WP->bitbuffer <<= bits;
-	  WP->filebit_index -= bits;
-	  break;
-	}
-      else
-        {
-	  // Otherwise extract the bits we have and continue (which will
-	  // then load the next 16-bits into the bitbuffer
-	  x <<= WP->filebit_index;
-	  x |= WP->bitbuffer >> (16 - WP->filebit_index);
-	  bits -= WP->filebit_index;
-	  WP->filebit_index = 0;
-	}
+      READ(WP, &WP->bitbuffer, 2);
+      WP->filebit_index = 16;
     }
-  return (int) x;
+
+    // If all the bits we need are in the current word, extract the bits,
+    // update state, and break out of the loop.
+    if (bits < WP->filebit_index)
+    {
+      x <<= bits;
+      x |= WP->bitbuffer >> (16 - bits);
+      WP->bitbuffer <<= bits;
+      WP->filebit_index -= bits;
+      break;
+    }
+    else
+    {
+      // Otherwise extract the bits we have and continue (which will
+      // then load the next 16-bits into the bitbuffer
+      x <<= WP->filebit_index;
+      x |= WP->bitbuffer >> (16 - WP->filebit_index);
+      bits -= WP->filebit_index;
+      WP->filebit_index = 0;
+    }
+  }
+  return (int)x;
 }
 
 // ReadWord
@@ -450,123 +510,214 @@ void FrameDecode(WacState *WP)
 
   // At start of block parse block header
   if (0 == (WP->frameindex % WP->blocksize))
+  {
+    // Verify that the block header is valid and as expected
+    int block = WP->frameindex / WP->blocksize;
+
+    // DEBUG
+    // fprintf(stderr, "New Block %d\n", block);
+
+    if (ReadWord(WP) != 0x8000 || ReadWord(WP) != 0x0001 || ReadWord(WP) != (block & 0xffff) || ReadWord(WP) != ((block >> 16) & 0xffff))
     {
-      // Verify that the block header is valid and as expected
-      int block = WP->frameindex / WP->blocksize;
-      if (   ReadWord(WP) != 0x8000
-          || ReadWord(WP) != 0x0001
-	  || ReadWord(WP) != (block & 0xffff)
-	  || ReadWord(WP) != ((block >> 16) & 0xffff)
-	 )
-	{
-	  fprintf(stderr, "Bad block header\n");
-	  exit(1);
-	}
-
-// Please, no clutter ... this is GPL >= 3.0
-//      if (0 == WP->frameindex % 1024)
-//        {
-//          fprintf(stderr, "."); // progress...
-//	}
-
-// this part is not yet used in output -- START
-      // If GPS data present and the block number is modulo the blocks per
-      // seek table entry, then load the latitude and longitude.
-      if ((WP->flags & 0x20) && 0 == (block % WP->seeksize))
-        {
-	  int lathi = ReadBits(WP,9);
-	  int latlo = ReadBits(WP,16);
-	  int lonhi = ReadBits(WP,10);
-	  int lonlo = ReadBits(WP,16);
-
-	  // For this example, we are not actually using the latitude and
-	  // longitude.  But these values are 100,000 times the latitude and
-	  // longitude in degrees with positive sign indicating north latitude
-	  // and west longitude.  These can be derived as follows:
-	  //
-	  //   float lat = ((lathi<<16)|latlo) / 100000.0;
-	  //   float lon = ((lonhi<<16)|lonlo) / 100000.0;
-        }
-
-      // If tag data present read it.  For this example, we aren't using this
-      // data.  But for EM3 recordings, for example, this tag value would
-      // be 1-4 corresponding to buttons A-D being depressed during this frame.
-      if (WP->flags & 0x40)
-        {
-	  int tag = ReadBits(WP,4);
-        }
-// this part is not yet used in output -- END
-
+      fprintf(stderr, "Bad block header\n");
+      exit(1);
     }
+
+    // Please, no clutter ... this is GPL >= 3.0
+    //      if (0 == WP->frameindex % 1024)
+    //        {
+    //          fprintf(stderr, "."); // progress...
+    //	}
+
+    // this part is not yet used in output -- START
+    // If GPS data present and the block number is modulo the blocks per
+    // seek table entry, then load the latitude and longitude.
+    if ((WP->flags & 0x20) && 0 == (block % WP->seeksize))
+    {
+      int lathi = ReadBits(WP, 9);
+      int latlo = ReadBits(WP, 16);
+      int lonhi = ReadBits(WP, 10);
+      int lonlo = ReadBits(WP, 16);
+
+      // For this example, we are not actually using the latitude and
+      // longitude.  But these values are 100,000 times the latitude and
+      // longitude in degrees with positive sign indicating north latitude
+      // and west longitude.  These can be derived as follows:
+      //
+      //   float lat = ((lathi<<16)|latlo) / 100000.0;
+      //   float lon = ((lonhi<<16)|lonlo) / 100000.0;
+    }
+
+    // If tag data present read it.  For this example, we aren't using this
+    // data.  But for EM3 recordings, for example, this tag value would
+    // be 1-4 corresponding to buttons A-D being depressed during this frame.
+    if (WP->flags & 0x40)
+    {
+      int tag = ReadBits(WP, 4);
+    }
+    // this part is not yet used in output -- END
+  }
   // Advance frame
   WP->frameindex++;
 
   // Read the per-channel Golumb remainder code size
   for (ch = 0; ch < WP->channelcount; ch++)
-    {
-      lastsample[ch] = 0;
-      g[ch] = ReadBits(WP,4);
-    }
+  {
+    lastsample[ch] = 0;
+    g[ch] = ReadBits(WP, 4);
+  }
 
   // Read samples for frame
   for (i = 0; i < WP->framesize; i++)
+  {
+    // Interleave channels
+    for (ch = 0; ch < WP->channelcount; ch++)
     {
-      // Interleave channels
-      for (ch = 0; ch < WP->channelcount; ch++)
+      int delta;
+      int stopbit;
+
+      // ZERO FRAME
+      // Special case: For triggered WAC files, the code size is set to
+      // zero to indicate a zero-value frame.  This represents the
+      // space between triggered events in the WAC file.  A trigger-aware
+      // parser would look for onset/offset of this condition to break up
+      // a WAC file into individual triggers.  In this example, we are just
+      // filling the space with zero sample values.  And we won't actually
+      // get to this code because the presence of these special zero-value
+      // frames also requires that the header flags has 0x10 set.  In
+      // main() above, we exit with an error if this is the case.
+      if (g[ch] == 0)
+      {
+        // Hit a zero ... ignore, but flag we want to start a new file
+        skip_frames = 1;
+        continue;
+        // s = 0;
+        // WRITE(WP, &s, 2);
+        // continue;
+      }
+      if (skip_frames)
+      // Have to start a new file
+      {
+        skip_frames = 0;
+
+        float time_offset = (float)((WP->frameindex - 1) * WP->framesize) / WP->samplerate;
+        printf("Frame Index %i, Time Offset %f\n", WP->frameindex, time_offset);
+
+        fclose(WP->filetbl[1]);
+        WP->file_index++;
+        printf("Exporting Triggered Event %i\n", WP->file_index);
+        char wfile_name[128];
+
+        if (date_time_valid)
         {
-	  int delta;
-	  int stopbit;
+          struct tm event_ts = file_ts;
+          event_ts.tm_sec += time_offset;
+          mktime(&event_ts);
+          int fmsec = (int)(((time_offset - (int)time_offset) + 0.0005) * 1000);
 
-	  // ZERO FRAME
-	  // Special case: For triggered WAC files, the code size is set to
-	  // zero to indicate a zero-value frame.  This represents the
-	  // space between triggered events in the WAC file.  A trigger-aware
-	  // parser would look for onset/offset of this condition to break up
-	  // a WAC file into individual triggers.  In this example, we are just
-	  // filling the space with zero sample values.  And we won't actually
-	  // get to this code because the presence of these special zero-value
-	  // frames also requires that the header flags has 0x10 set.  In
-	  // main() above, we exit with an error if this is the case.
-	  if (g[ch] == 0)
-	    {
-	      s = 0;
-	      WRITE(WP, &s, 2);
-	      continue;
-	    }
+          char buf[64];
+          strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &event_ts);
+          printf("New calculate time: %s.%d\n", buf, fmsec);
 
-	  // Read the remainder code from the specified number of bits
-	  code = ReadBits(WP,g[ch]);
+          printf("%i_%s_%s_%03i.wav\n", WP->file_index, file_basename, buf, fmsec);
+          sprintf(wfile_name, "%i_%s_%s_%03i.wav", WP->file_index, file_basename, buf, fmsec);
+        }
+        else
+        {
+          sprintf(wfile_name, "%i_%s_%i_%i.wav", WP->file_index, file_basename, (int)time_offset, (int)((time_offset - (int)time_offset) * 1000));
+        }
+        WP->filetbl[1] = fopen(wfile_name, "wb");
+        WriteWAVHeader(WP);
+      }
 
-	  // Read the quotient represented by alternating 1/0 pattern
-	  // following the remainder code
-	  stopbit = (code & 1) ^ 1;
-	  while (stopbit != ReadBits(WP,1))
-	    {
-	      code += 1 << g[ch];
-	      stopbit ^= 1;
-	    }
+      // Read the remainder code from the specified number of bits
+      code = ReadBits(WP, g[ch]);
 
-	  // Adjust for sign
-	  if (code & 1)
-	    {
-	      delta = -(code+1)/2;
-	    }
-	  else
-	    {
-	      delta = code/2;
-	    }
+      // Read the quotient represented by alternating 1/0 pattern
+      // following the remainder code
+      stopbit = (code & 1) ^ 1;
+      while (stopbit != ReadBits(WP, 1))
+      {
+        code += 1 << g[ch];
+        stopbit ^= 1;
+      }
 
-	  // Compute sample value as delta from previous sample
-	  delta += lastsample[ch];
-	  lastsample[ch] = delta;
+      // Adjust for sign
+      if (code & 1)
+      {
+        delta = -(code + 1) / 2;
+      }
+      else
+      {
+        delta = code / 2;
+      }
 
-	  // Restore dropped least-significant bits used in higher levels
-	  // of compression e.g. WAC1, WAC2, etc.
-	  delta <<= lossybits;
+      // Compute sample value as delta from previous sample
+      delta += lastsample[ch];
+      lastsample[ch] = delta;
 
-	  // Write 16-bit sample to output file
-	  s = delta;
-	  WRITE(WP, &s, 2);
-	}
+      // Restore dropped least-significant bits used in higher levels
+      // of compression e.g. WAC1, WAC2, etc.
+      delta <<= lossybits;
+
+      // Write 16-bit sample to output file
+      s = delta;
+      WRITE(WP, &s, 2);
     }
+  }
+}
+
+void WriteWAVHeader(WacState *WP)
+{
+  unsigned ul;
+  unsigned char cc[4];
+
+  // Write WAV file header from WAC header information
+  WRITE(WP, "RIFF", 4);
+  ul = 4        // "WAVE
+       + 8 + 16 // fmt chunk
+       + 8      // data chunk
+       + 2 * WP->samplecount * WP->channelcount;
+  cc[3] = (ul >> 24) & 0xff;
+  cc[2] = (ul >> 16) & 0xff;
+  cc[1] = (ul >> 8) & 0xff;
+  cc[0] = (ul)&0xff;
+  WRITE(WP, cc, 4);
+  WRITE(WP, "WAVE", 4);
+  WRITE(WP, "fmt ", 4);
+  ul = 16;
+  cc[3] = (ul >> 24) & 0xff;
+  cc[2] = (ul >> 16) & 0xff;
+  cc[1] = (ul >> 8) & 0xff;
+  cc[0] = (ul)&0xff;
+  WRITE(WP, cc, 4);
+  cc[0] = 1; // tag
+  cc[1] = 0;
+  WRITE(WP, cc, 2);
+  cc[0] = WP->channelcount;
+  WRITE(WP, cc, 2);
+  ul = WP->samplerate;
+  cc[3] = (ul >> 24) & 0xff;
+  cc[2] = (ul >> 16) & 0xff;
+  cc[1] = (ul >> 8) & 0xff;
+  cc[0] = (ul)&0xff;
+  WRITE(WP, cc, 4);
+  ul *= WP->channelcount * 2; // bytes per second
+  cc[3] = (ul >> 24) & 0xff;
+  cc[2] = (ul >> 16) & 0xff;
+  cc[1] = (ul >> 8) & 0xff;
+  cc[0] = (ul)&0xff;
+  WRITE(WP, cc, 4);
+  cc[0] = 2 * WP->channelcount; // bytes per sample
+  cc[1] = 0;
+  WRITE(WP, cc, 2);
+  cc[0] = 16; // bits per sample
+  WRITE(WP, cc, 2);
+  WRITE(WP, "data", 4);
+  ul = WP->samplecount * WP->channelcount * 2;
+  cc[3] = (ul >> 24) & 0xff;
+  cc[2] = (ul >> 16) & 0xff;
+  cc[1] = (ul >> 8) & 0xff;
+  cc[0] = (ul)&0xff;
+  WRITE(WP, cc, 4);
 }
