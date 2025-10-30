@@ -161,6 +161,22 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include <time.h>
+// Windows doesn't have strptime, so we implement a simple version
+char* strptime(const char *buf, const char *fmt, struct tm *tm) {
+    // Simple implementation for format: "%Y%m%d_%H%M%S"
+    if (sscanf(buf, "%4d%2d%2d_%2d%2d%2d",
+               &tm->tm_year, &tm->tm_mon, &tm->tm_mday,
+               &tm->tm_hour, &tm->tm_min, &tm->tm_sec) == 6) {
+        tm->tm_year -= 1900;  // tm_year is years since 1900
+        tm->tm_mon -= 1;       // tm_mon is 0-11
+        return (char*)buf;
+    }
+    return NULL;
+}
+#endif
+
 #define VERSION ("0.1")
 
 typedef struct WacState_s
@@ -203,7 +219,7 @@ char dest_file[80];
 
 void print_help(char *arg)
 {
-  fprintf(stderr, "Usage: %s [-v] [-h] input.wac\n", arg);
+  fprintf(stderr, "Usage: %s [-v] [-h] input.wac [output.wav]\n", arg);
 }
 
 // Simply take stdin to stdout
@@ -268,18 +284,25 @@ int main(int argc, char *argv[])
     exit(1);
   }
 
-  strcpy(dest_file, argv[optind]);
   W.filetbl[0] = fopen(argv[optind], "rb");
 
-  // attempt to extract date and timestamp
-  char delimext[] = ".";
-  char delim[] = "_";
+// Extract just the filename from the full path
+char *last_slash = strrchr(argv[optind], '\\');
+if (last_slash == NULL) {
+    last_slash = strrchr(argv[optind], '/');
+}
+char *filename_only = (last_slash != NULL) ? last_slash + 1 : argv[optind];
 
-  // strcpy(temp_str, argv[2]);
+// Copy to modifiable string
+strcpy(dest_file, filename_only);
 
-  file_basename = strtok(dest_file, delimext);
-  file_basename = strtok(file_basename, delim);
-  printf("%s\n", file_basename);
+// attempt to extract date and timestamp
+char delimext[] = ".";
+char delim[] = "_";
+
+file_basename = strtok(dest_file, delimext);
+file_basename = strtok(file_basename, delim);
+printf("%s\n", file_basename);
 
   if (file_basename != NULL)
   {
@@ -306,7 +329,8 @@ int main(int argc, char *argv[])
 
   memset(&file_ts, 0, sizeof(struct tm));
 
-  if (date_time_valid)
+
+if (date_time_valid)
   {
     char buf[64];
     sprintf(buf, "%s_%s", file_date, file_time);
@@ -319,11 +343,21 @@ int main(int argc, char *argv[])
     printf("Date %2i-%02i-%02i\n", year, month, day);
     printf("Time %02i:%02i:%02i\n", hour, min, sec);
 
-    sprintf(wfile_name, "%i_%s_%s_%03i.wav", W.file_index, file_basename, buf, 0);
+    // Check if output path was provided as second argument
+    if (argc > optind + 1) {
+      strcpy(wfile_name, argv[optind + 1]);
+    } else {
+      sprintf(wfile_name, "%i_%s_%s_%03i.wav", W.file_index, file_basename, buf, 0);
+    }
   }
   else
   {
-    sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, file_basename);
+    // Check if output path was provided as second argument
+    if (argc > optind + 1) {
+      strcpy(wfile_name, argv[optind + 1]);
+    } else {
+      sprintf(wfile_name, "%i_%s_0_000.wav", W.file_index, file_basename);
+    }
   }
 
   W.filetbl[1] = fopen(wfile_name, "wb");
